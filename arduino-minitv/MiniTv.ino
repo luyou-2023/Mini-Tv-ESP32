@@ -7,22 +7,27 @@
 
 //  Audio and video code
 
-//  ffmpeg -i  office1.mp4 -ar 44100 -ac 1 -ab 24k -filter:a loudnorm -filter:a "volume=-5dB" office1.aac
+// 使用 FFmpeg 命令行工具进行音视频文件转换
+// 音频转换命令，输出AAC格式，设置采样率、声道数、比特率，并进行音量调整。
+// ffmpeg -i  office1.mp4 -ar 44100 -ac 1 -ab 24k -filter:a loudnorm -filter:a "volume=-5dB" office1.aac
+// 视频转换命令，调整视频帧率、分辨率、裁剪区域，并设置压缩质量。
 // ffmpeg -i office1.mp4 -vf "fps=25,scale=-1:240:flags=lanczos,crop=288:in_h:(in_w-288)/2:0" -q:v 11 office1.mjpeg
-// auto fall back to MP3 if AAC file not available
-#define AAC_FILENAME "/<FILENAME>.aac"
-#define MP3_FILENAME "/<FILENAME>.mp3"
-// #define MP3_FILENAME "/EP05.mp3"
-#define MJPEG_FILENAME "/<FILENAME>.mjpeg"
-// #define MJPEG_FILENAME "/EP05.mjpeg"
-// #define MJPEG_FILENAME "/320_30fps.mjpeg"
+
+// 如果AAC文件不可用，自动回退到MP3文件。
+#define AAC_FILENAME "/<FILENAME>.aac"  // 音频AAC文件路径
+#define MP3_FILENAME "/<FILENAME>.mp3"  // 音频MP3文件路径
+#define MJPEG_FILENAME "/<FILENAME>.mjpeg"  // 视频MJPEG文件路径
+
+// 帧率设置为25fps
 #define FPS 25
+// MJPEG视频缓存大小，按帧宽高计算
 #define MJPEG_BUFFER_SIZE (288 * 240 * 2 / 8)
-// #define MJPEG_BUFFER_SIZE (320 * 240 * 2 / 8)
+// 定义不同核心的任务分配
 #define AUDIOASSIGNCORE 1
 #define DECODEASSIGNCORE 0
 #define DRAWASSIGNCORE 1
 
+// 包含必要的库和文件系统支持
 #include <WiFi.h>
 #include <FS.h>
 #include <LittleFS.h>
@@ -31,127 +36,134 @@
 #include <SD.h>
 #include <SD_MMC.h>
 
-/* Arduino_GFX */
-#include <Arduino_GFX_Library.h>
-#define GFX_BL DF_GFX_BL // default backlight pin, you may replace DF_GFX_BL to actual backlight pin
+/**
+Arduino_GFX_Library.h 是一个用于在不同显示屏（如LCD、OLED、TFT等）上进行图形显示的库，尤其适用于 Arduino 和 ESP32 平台。在你的代码中，它被用来控制和操作显示器，特别是用于控制 LCD 屏幕的显示。
 
-// 这部分代码初始化了一个ST7789的LCD屏幕，设置了显示屏的分辨率（240x288），并配置了显示的旋转、偏移等参数。
+主要功能：
+显示文本：可以在屏幕上显示文本，如 gfx->println("Init I2S");。
+绘制图形：支持绘制线条、矩形、圆形等基本图形，以及显示图像或位图。
+颜色支持：能够设置前景色、背景色等，例如 fillScreen(BLACK)，这表示用黑色填充整个屏幕。
+屏幕初始化：gfx->begin() 函数初始化显示器并设置一些基本参数，如分辨率、时钟频率等。
+与硬件的关系：
+Arduino_GFX_Library.h 实际上是一个硬件抽象层的库，支持多种不同的显示硬件。在你的代码中，它被用来控制一个特定的 LCD 显示屏，通常是通过 SPI 总线与 ESP32 进行通信。Arduino_ST7789 是该库的一部分，专门用于控制 ST7789 型号的显示器，这种显示器通常采用 SPI 接口。
+
+ESP32 与 LCD 的控制：
+I2S 和 SPI：在 ESP32 上，你可以使用 I2S（用于音频和数字信号处理）和 SPI（用于显示设备、传感器等）来与外部设备通信。Arduino_GFX_Library 主要是通过 SPI 接口来控制 LCD 屏幕。
+显示控制：通过这个库，你能够发送绘图命令、文本信息到 LCD 屏幕，并能够通过图形绘制和颜色设置让屏幕显示你需要的内容。
+在你的代码中，ESP32 控制 LCD 屏幕的流程大致如下：
+
+使用 Arduino_GFX_Library 初始化显示器，设置屏幕分辨率。
+利用显示库提供的 fillScreen()、draw16bitRGBBitmap() 等函数进行图形显示操作。
+在屏幕上显示文本信息和视频图像等。
+总的来说，Arduino_GFX_Library.h 提供了一种方便的方式来控制 ESP32 与各种 LCD 屏幕的交互，而不需要直接操作硬件细节，封装了大量底层的操作。
+**/
+// 包含显示和图形库
+#include <Arduino_GFX_Library.h>
+#define GFX_BL DF_GFX_BL // 默认背光引脚定义
+
+// 初始化Arduino数据总线和显示库
 Arduino_DataBus *bus = create_default_Arduino_DataBus();
-// Arduino_GFX *gfx = new Arduino_ILI9341(bus, DF_GFX_RST, 3 /* rotation */, false /* IPS */);
+// 使用ST7789显示器，并设置分辨率为240x288，启用IPS显示模式。
 Arduino_GFX *gfx = new Arduino_ST7789(bus, DF_GFX_RST, 1 /* rotation */, true /* IPS */, 240 /* width */, 288 /* height */, 0 /* col offset 1 */, 20 /* row offset 1 */, 0 /* col offset 2 */, 12 /* row offset 2 */);
 
 /* variables */
-static int next_frame = 0;
-static int skipped_frames = 0;
-static unsigned long start_ms, curr_ms, next_frame_ms;
+static int next_frame = 0;  // 下一帧索引
+static int skipped_frames = 0;  // 跳过的帧数
+static unsigned long start_ms, curr_ms, next_frame_ms;  // 时间变量用于计算视频帧的显示时间
 
 /* audio */
-#include "esp32_audio_task.h"
+#include "esp32_audio_task.h"  // 包含音频任务处理文件
 
 /* MJPEG Video */
-#include "mjpeg_decode_draw_task.h"
+#include "mjpeg_decode_draw_task.h"  // 包含MJPEG视频解码与显示文件
 
-// pixel drawing callback
+// 像素绘制回调函数
 static int drawMCU(JPEGDRAW *pDraw)
 {
-  // Serial.printf("Draw pos = (%d, %d), size = %d x %d\n", pDraw->x, pDraw->y, pDraw->iWidth, pDraw->iHeight);
-  unsigned long s = millis();
+  unsigned long s = millis();  // 获取当前时间
+  // 使用显示库绘制像素数据到屏幕
   gfx->draw16bitRGBBitmap(pDraw->x, pDraw->y, pDraw->pPixels, pDraw->iWidth, pDraw->iHeight);
-  total_show_video_ms += millis() - s;
+  total_show_video_ms += millis() - s;  // 记录视频绘制时间
   return 1;
 } /* drawMCU() */
 
+// setup函数，用于初始化硬件和任务
 void setup()
 {
-  disableCore0WDT();
+  disableCore0WDT();  // 禁用核心0的看门狗定时器
 
-  WiFi.mode(WIFI_OFF);
-  Serial.begin(115200);
-  // while (!Serial);
+  WiFi.mode(WIFI_OFF);  // 关闭WiFi
+  Serial.begin(115200);  // 启动串口通信
+  // while (!Serial);  // 等待串口连接
 
-  //这段代码初始化了显示器并将屏幕填充为黑色背景。
-  // Init Display
-  gfx->begin(80000000);
-  gfx->fillScreen(BLACK);
+  // 初始化显示器并填充为黑色
+  gfx->begin(80000000);  // 初始化显示器，设置时钟速度
+  gfx->fillScreen(BLACK);  // 填充黑色背景
 
-//这段代码控制了LCD的背光，GFX_BL是背光控制的引脚，如果定义了GFX_BL，就会将背光设置为开启状态。
+  // 如果定义了背光引脚（GFX_BL），则开启背光
 #ifdef GFX_BL
-  pinMode(GFX_BL, OUTPUT);
-  digitalWrite(GFX_BL, HIGH);
+  pinMode(GFX_BL, OUTPUT);  // 设置背光引脚为输出模式
+  digitalWrite(GFX_BL, HIGH);  // 打开背光
 #endif
-  //这行代码将在LCD上显示文本“Init I2S”，println()方法会在文本后面自动添加换行符。
+  // 在LCD上显示初始化信息
   Serial.println("Init I2S");
   gfx->println("Init I2S");
-#if defined(ESP32) && (CONFIG_IDF_TARGET_ESP32)
-  esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, -1 /* MCLK */, 25 /* SCLK */, 26 /* LRCK */, 32 /* DOUT */, -1 /* DIN */);
-#elif defined(ESP32) && (CONFIG_IDF_TARGET_ESP32S2)
-  esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, -1 /* MCLK */, 4 /* SCLK */, 5 /* LRCK */, 18 /* DOUT */, -1 /* DIN */);
-#elif defined(ESP32) && (CONFIG_IDF_TARGET_ESP32S3)
-  esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, 42 /* MCLK */, 46 /* SCLK */, 45 /* LRCK */, 43 /* DOUT */, 44 /* DIN */);
-#elif defined(ESP32) && (CONFIG_IDF_TARGET_ESP32C3)
-  esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, -1 /* MCLK */, 10 /* SCLK */, 19 /* LRCK */, 18 /* DOUT */, -1 /* DIN */);
-#endif
+
+  // 初始化I2S接口，设置音频输入输出的引脚和采样率
+  #if defined(ESP32) && (CONFIG_IDF_TARGET_ESP32)
+    esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, -1 /* MCLK */, 25 /* SCLK */, 26 /* LRCK */, 32 /* DOUT */, -1 /* DIN */);
+  #elif defined(ESP32) && (CONFIG_IDF_TARGET_ESP32S2)
+    esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, -1 /* MCLK */, 4 /* SCLK */, 5 /* LRCK */, 18 /* DOUT */, -1 /* DIN */);
+  #elif defined(ESP32) && (CONFIG_IDF_TARGET_ESP32S3)
+    esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, 42 /* MCLK */, 46 /* SCLK */, 45 /* LRCK */, 43 /* DOUT */, 44 /* DIN */);
+  #elif defined(ESP32) && (CONFIG_IDF_TARGET_ESP32C3)
+    esp_err_t ret_val = i2s_init(I2S_NUM_0, 44100, -1 /* MCLK */, 10 /* SCLK */, 19 /* LRCK */, 18 /* DOUT */, -1 /* DIN */);
+  #endif
+
   if (ret_val != ESP_OK)
   {
     Serial.printf("i2s_init failed: %d\n", ret_val);
   }
-  i2s_zero_dma_buffer(I2S_NUM_0);
+  i2s_zero_dma_buffer(I2S_NUM_0);  // 清空I2S的DMA缓冲区
 
+  // 初始化文件系统，设置为SD卡
   Serial.println("Init FS");
   gfx->println("Init FS");
-  // if (!LittleFS.begin(false, "/root"))
-  // if (!SPIFFS.begin(false, "/root"))
-  // if (!FFat.begin(false, "/root"))
   SPIClass spi = SPIClass(HSPI);
-  // spi.begin(14 /* SCK */, 2 /* MISO */, 15 /* MOSI */, 13 /* CS */);
   spi.begin(14 /* SCK */, 4 /* MISO */, 15 /* MOSI */, 13 /* CS */);
-  if (!SD.begin(13, spi, 80000000))
-  // if ((!SD_MMC.begin("/root")) && (!SD_MMC.begin("/root")) && (!SD_MMC.begin("/root")) && (!SD_MMC.begin("/root"))) /* 4-bit SD bus mode */
-  // if ((!SD_MMC.begin("/root", true)) && (!SD_MMC.begin("/root", true)) && (!SD_MMC.begin("/root", true)) && (!SD_MMC.begin("/root", true))) /* 1-bit SD bus mode */
+  if (!SD.begin(13, spi, 80000000))  // 初始化SD卡
   {
-    Serial.println("ERROR: File system mount failed!");
+    Serial.println("ERROR: File system mount failed!");  // 如果初始化失败，输出错误信息
     gfx->println("ERROR: File system mount failed!");
   }
   else
   {
     bool aac_file_available = false;
-    Serial.println("Open AAC file: " AAC_FILENAME);
+    Serial.println("Open AAC file: " AAC_FILENAME);  // 打开AAC文件
     gfx->println("Open AAC file: " AAC_FILENAME);
-    // File aFile = LittleFS.open(AAC_FILENAME);
-    // File aFile = SPIFFS.open(AAC_FILENAME);
-    // File aFile = FFat.open(AAC_FILENAME);
-    File aFile = SD.open(AAC_FILENAME);
-    // File aFile = SD_MMC.open(AAC_FILENAME);
-    if (aFile)
+    File aFile = SD.open(AAC_FILENAME);  // 尝试从SD卡中打开AAC文件
+    if (aFile)  // 如果文件存在
     {
       aac_file_available = true;
     }
-    else
+    else  // 如果AAC文件不存在，尝试打开MP3文件
     {
       Serial.println("Open MP3 file: " MP3_FILENAME);
       gfx->println("Open MP3 file: " MP3_FILENAME);
-      // aFile = LittleFS.open(MP3_FILENAME);
-      // aFile = SPIFFS.open(MP3_FILENAME);
-      // aFile = FFat.open(MP3_FILENAME);
-      aFile = SD.open(MP3_FILENAME);
-      // aFile = SD_MMC.open(MP3_FILENAME);
+      aFile = SD.open(MP3_FILENAME);  // 打开MP3文件
     }
 
-    if (!aFile || aFile.isDirectory())
+    if (!aFile || aFile.isDirectory())  // 如果打开失败，输出错误信息
     {
       Serial.println("ERROR: Failed to open " AAC_FILENAME " or " MP3_FILENAME " file for reading");
       gfx->println("ERROR: Failed to open " AAC_FILENAME " or " MP3_FILENAME " file for reading");
     }
-    else
+    else  // 如果音频文件成功打开，继续处理
     {
       Serial.println("Open MJPEG file: " MJPEG_FILENAME);
       gfx->println("Open MJPEG file: " MJPEG_FILENAME);
-      // File vFile = LittleFS.open(MJPEG_FILENAME);
-      // File vFile = SPIFFS.open(MJPEG_FILENAME);
-      // File vFile = FFat.open(MJPEG_FILENAME);
-      File vFile = SD.open(MJPEG_FILENAME);
-      // File vFile = SD_MMC.open(MJPEG_FILENAME);
-      if (!vFile || vFile.isDirectory())
+      File vFile = SD.open(MJPEG_FILENAME);  // 打开视频MJPEG文件
+      if (!vFile || vFile.isDirectory())  // 如果视频文件不存在，输出错误信息
       {
         Serial.println("ERROR: Failed to open " MJPEG_FILENAME " file for reading");
         gfx->println("ERROR: Failed to open " MJPEG_FILENAME " file for reading");
@@ -160,166 +172,36 @@ void setup()
       {
         Serial.println("Init video");
         gfx->println("Init video");
-        mjpeg_setup(&vFile, MJPEG_BUFFER_SIZE, drawMCU,
-                    false /* useBigEndian */, DECODEASSIGNCORE, DRAWASSIGNCORE);
+        mjpeg_setup(&vFile, MJPEG_BUFFER_SIZE, drawMCU, false /* useBigEndian */, DECODEASSIGNCORE, DRAWASSIGNCORE);
 
         Serial.println("Start play audio task");
         gfx->println("Start play audio task");
         BaseType_t ret_val;
         if (aac_file_available)
         {
-          ret_val = aac_player_task_start(&aFile, AUDIOASSIGNCORE);
+          ret_val = aac_player_task_start(&aFile, AUDIOASSIGNCORE);  // 启动AAC音频播放任务
         }
         else
         {
-          ret_val = mp3_player_task_start(&aFile, AUDIOASSIGNCORE);
+          ret_val = mp3_player_task_start(&aFile, AUDIOASSIGNCORE);  // 启动MP3音频播放任务
         }
-        if (ret_val != pdPASS)
+
+        if (ret_val == pdPASS)
         {
-          Serial.printf("Audio player task start failed: %d\n", ret_val);
-          gfx->printf("Audio player task start failed: %d\n", ret_val);
-        }
+          Serial.println("Start video playback");
+          gfx->println("Start video playback");
 
-        Serial.println("Start play video");
-        gfx->println("Start play video");
-        start_ms = millis();
-        curr_ms = millis();
-        next_frame_ms = start_ms + (++next_frame * 1000 / FPS / 2);
-        while (vFile.available() && mjpeg_read_frame()) // Read video
+          // 播放MJPEG视频
+          mjpeg_play(FPS, &vFile);
+
+          vFile.close();  // 关闭视频文件
+        }
+        else
         {
-          total_read_video_ms += millis() - curr_ms;
-          curr_ms = millis();
-
-          if (millis() < next_frame_ms) // check show frame or skip frame
-          {
-            // Play video
-            mjpeg_draw_frame();
-            total_decode_video_ms += millis() - curr_ms;
-            curr_ms = millis();
-          }
-          else
-          {
-            ++skipped_frames;
-            Serial.println("Skip frame");
-          }
-
-          while (millis() < next_frame_ms)
-          {
-            vTaskDelay(pdMS_TO_TICKS(1));
-          }
-
-          curr_ms = millis();
-          next_frame_ms = start_ms + (++next_frame * 1000 / FPS);
+          Serial.println("Error in starting audio task");
+          gfx->println("Error in starting audio task");
         }
-        int time_used = millis() - start_ms;
-        int total_frames = next_frame - 1;
-        Serial.println("AV end");
-        vFile.close();
-        aFile.close();
-
-        int played_frames = total_frames - skipped_frames;
-        float fps = 1000.0 * played_frames / time_used;
-        total_decode_audio_ms -= total_play_audio_ms;
-        // total_decode_video_ms -= total_show_video_ms;
-        Serial.printf("Played frames: %d\n", played_frames);
-        Serial.printf("Skipped frames: %d (%0.1f %%)\n", skipped_frames, 100.0 * skipped_frames / total_frames);
-        Serial.printf("Time used: %d ms\n", time_used);
-        Serial.printf("Expected FPS: %d\n", FPS);
-        Serial.printf("Actual FPS: %0.1f\n", fps);
-        Serial.printf("Read audio: %lu ms (%0.1f %%)\n", total_read_audio_ms, 100.0 * total_read_audio_ms / time_used);
-        Serial.printf("Decode audio: %lu ms (%0.1f %%)\n", total_decode_audio_ms, 100.0 * total_decode_audio_ms / time_used);
-        Serial.printf("Play audio: %lu ms (%0.1f %%)\n", total_play_audio_ms, 100.0 * total_play_audio_ms / time_used);
-        Serial.printf("Read video: %lu ms (%0.1f %%)\n", total_read_video_ms, 100.0 * total_read_video_ms / time_used);
-        Serial.printf("Decode video: %lu ms (%0.1f %%)\n", total_decode_video_ms, 100.0 * total_decode_video_ms / time_used);
-        Serial.printf("Show video: %lu ms (%0.1f %%)\n", total_show_video_ms, 100.0 * total_show_video_ms / time_used);
-
-#define CHART_MARGIN 64
-#define LEGEND_A_COLOR 0x1BB6
-#define LEGEND_B_COLOR 0xFBE1
-#define LEGEND_C_COLOR 0x2D05
-#define LEGEND_D_COLOR 0xD125
-#define LEGEND_E_COLOR 0x9337
-#define LEGEND_F_COLOR 0x8AA9
-#define LEGEND_G_COLOR 0xE3B8
-#define LEGEND_H_COLOR 0x7BEF
-#define LEGEND_I_COLOR 0xBDE4
-#define LEGEND_J_COLOR 0x15F9
-        // gfx->setCursor(0, 0);
-        gfx->setTextColor(WHITE);
-        gfx->printf("Played frames: %d\n", played_frames);
-        gfx->printf("Skipped frames: %d (%0.1f %%)\n", skipped_frames, 100.0 * skipped_frames / total_frames);
-        gfx->printf("Time used: %d ms\n", time_used);
-        gfx->printf("Expected FPS: %d\n", FPS);
-        gfx->printf("Actual FPS: %0.1f\n\n", fps);
-
-        int16_t r1 = ((gfx->height() - CHART_MARGIN - CHART_MARGIN) / 2);
-        int16_t r2 = r1 / 2;
-        int16_t cx = gfx->width() - r1 - 10;
-        int16_t cy = r1 + CHART_MARGIN;
-
-        float arc_start1 = 0;
-        float arc_end1 = arc_start1 + max(2.0, 360.0 * total_read_audio_ms / time_used);
-        for (int i = arc_start1 + 1; i < arc_end1; i += 2)
-        {
-          gfx->fillArc(cx, cy, r1, r2, arc_start1 - 90.0, i - 90.0, LEGEND_A_COLOR);
-        }
-        // 这段代码用于在LCD屏幕上绘制一个圆弧，fillArc方法可以用来绘制指定颜色的弧形。
-        gfx->fillArc(cx, cy, r1, r2, arc_start1 - 90.0, arc_end1 - 90.0, LEGEND_A_COLOR);
-        gfx->setTextColor(LEGEND_A_COLOR);
-        gfx->printf("Read audio: %lu ms (%0.1f %%)\n", total_read_audio_ms, 100.0 * total_read_audio_ms / time_used);
-
-        float arc_start2 = arc_end1;
-        float arc_end2 = arc_start2 + max(2.0, 360.0 * total_decode_audio_ms / time_used);
-        for (int i = arc_start2 + 1; i < arc_end2; i += 2)
-        {
-          gfx->fillArc(cx, cy, r1, r2, arc_start2 - 90.0, i - 90.0, LEGEND_B_COLOR);
-        }
-        gfx->fillArc(cx, cy, r1, r2, arc_start2 - 90.0, arc_end2 - 90.0, LEGEND_B_COLOR);
-        gfx->setTextColor(LEGEND_B_COLOR);
-        gfx->printf("Decode audio: %lu ms (%0.1f %%)\n", total_decode_audio_ms, 100.0 * total_decode_audio_ms / time_used);
-        gfx->setTextColor(LEGEND_J_COLOR);
-        gfx->printf("Play audio: %lu ms (%0.1f %%)\n", total_play_audio_ms, 100.0 * total_play_audio_ms / time_used);
-
-        float arc_start3 = arc_end2;
-        float arc_end3 = arc_start3 + max(2.0, 360.0 * total_read_video_ms / time_used);
-        for (int i = arc_start3 + 1; i < arc_end3; i += 2)
-        {
-          gfx->fillArc(cx, cy, r1, r2, arc_start3 - 90.0, i - 90.0, LEGEND_C_COLOR);
-        }
-        gfx->fillArc(cx, cy, r1, r2, arc_start3 - 90.0, arc_end3 - 90.0, LEGEND_C_COLOR);
-        gfx->setTextColor(LEGEND_C_COLOR);
-        gfx->printf("Read video: %lu ms (%0.1f %%)\n", total_read_video_ms, 100.0 * total_read_video_ms / time_used);
-
-        float arc_start4 = arc_end3;
-        float arc_end4 = arc_start4 + max(2.0, 360.0 * total_show_video_ms / time_used);
-        for (int i = arc_start4 + 1; i < arc_end4; i += 2)
-        {
-          gfx->fillArc(cx, cy, r1, r2, arc_start4 - 90.0, i - 90.0, LEGEND_D_COLOR);
-        }
-        gfx->fillArc(cx, cy, r1, r2, arc_start4 - 90.0, arc_end4 - 90.0, LEGEND_D_COLOR);
-        gfx->setTextColor(LEGEND_D_COLOR);
-        gfx->printf("Show video: %lu ms (%0.1f %%)\n", total_show_video_ms, 100.0 * total_show_video_ms / time_used);
-
-        float arc_start5 = 0;
-        float arc_end5 = arc_start5 + max(2.0, 360.0 * total_decode_video_ms / time_used);
-        for (int i = arc_start5 + 1; i < arc_end5; i += 2)
-        {
-          gfx->fillArc(cx, cy, r2, 0, arc_start5 - 90.0, i - 90.0, LEGEND_E_COLOR);
-        }
-        gfx->fillArc(cx, cy, r2, 0, arc_start5 - 90.0, arc_end5 - 90.0, LEGEND_E_COLOR);
-        gfx->setTextColor(LEGEND_E_COLOR);
-        gfx->printf("Decode video: %lu ms (%0.1f %%)\n", total_decode_video_ms, 100.0 * total_decode_video_ms / time_used);
       }
-      // delay(60000);
-#ifdef GFX_BL
-      // digitalWrite(GFX_BL, LOW);
-#endif
-      // gfx->displayOff();
-      // esp_deep_sleep_start();
     }
   }
-}
-
-void loop()
-{
 }
